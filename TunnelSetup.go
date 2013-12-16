@@ -22,6 +22,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
+/* Changes:
+1.1 Added SOCKS5 setup
+1.0 Initial version
+*/
+
 package main
 
 import (
@@ -38,34 +43,24 @@ import (
 
 var (
 	instance            = config.Int("instance", 0)
-	proxyPort           = config.Int("proxy.startport", 8080)
+	proxyPort           = config.Int("proxy.port", 1080)
 	proxyServerAddr     = config.String("proxy.address", "10.0.1.136")
 	proxySSHMasterFlag  = config.String("proxy.sshmasterflag", "-o \"ControlMaster=yes\" -o \"ControlPath=~/.ssh/%r@%h:%p\"")
 
 )
 
 
-
 var cfgFile string
 var command string
 var ctrlSocket string
 var tunnelListFile string
+var bSocks bool
 
 var Usage = func() {
     fmt.Fprintf(os.Stderr, "Usage of %s\n", os.Args[0])
     flag.PrintDefaults()
 }
 
-func exec_command(program string, args ...string) {
-    cmd := exec.Command(program, args...)
-    cmd.Stdin = os.Stdin;
-    cmd.Stdout = os.Stdout;
-    cmd.Stderr = os.Stderr;
-    err := cmd.Run() 
-    if err != nil {
-        fmt.Printf("%v\n", err)
-    }
-}
 
 func readLines(path string) ([]string, error) {
   file, err := os.Open(path)
@@ -85,6 +80,7 @@ func readLines(path string) ([]string, error) {
 func main() {
 	flag.StringVar(&cfgFile, "c", "tunnels.cfg", "Tunnel config setup file")
 	flag.StringVar(&command, "e", "help", "Execute command: help|attach|detatch|config|forward <local port:ip:remote port>|remote <remote port:ip:local port>")
+	flag.BoolVar(&bSocks,"s", false, "Enable SOCKS server on attach")
 	
 	flag.Usage = Usage
     flag.Parse()
@@ -111,11 +107,20 @@ func main() {
 			fmt.Printf("Server %s already attached", *proxyServerAddr)
 			os.Exit(1)
 		}
-		
-		cmd := exec.Command("ssh", "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT", *proxyServerAddr)
+		var cmd *exec.Cmd
+		if bSocks {
+			cmd = exec.Command("ssh", "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT","-D", fmt.Sprintf("%d", *proxyPort), *proxyServerAddr)				
+    
 
-     stdout, err := cmd.StdoutPipe()
-     if err != nil {
+		} else
+		{
+			cmd = exec.Command("ssh", "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT", *proxyServerAddr)	
+     
+			
+		}
+					     stdout, err := cmd.StdoutPipe()
+
+		 if err != nil {
         log.Fatal(err)
      }
      stderr, err := cmd.StderrPipe()
@@ -135,6 +140,7 @@ func main() {
 	if err != nil {
         log.Fatal(err)
      }
+
 		fmt.Printf("Server %s is now attached\n", *proxyServerAddr)
 		os.Exit(0)
 	} else
