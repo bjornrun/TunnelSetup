@@ -32,6 +32,7 @@ package main
 import (
 	"fmt"
 	"github.com/stvp/go-toml-config"
+//	"github.com/bmatsuo/csvutil"
 	"flag"
 	"os"
 	"os/exec"
@@ -42,11 +43,15 @@ import (
 )
 
 var (
-	instance            = config.Int("instance", 0)
+//	tunnels             = config.String("tunnels", "")
+	portStart           = config.Int("portStart", 10000)
+	portEnd             = config.Int("portEnd", 65535)
+	lockdir             = config.String("lockdir", "/tmp/tunnelsetup/")
 	proxyPort           = config.Int("proxy.port", 1080)
 	proxyServerAddr     = config.String("proxy.address", "10.0.1.136")
 	proxySSHMasterFlag  = config.String("proxy.sshmasterflag", "-o \"ControlMaster=yes\" -o \"ControlPath=~/.ssh/%r@%h:%p\"")
-
+	proxyUser           = config.String("proxy.user", "proxy")
+	instance            = config.Int("instance", 0)
 )
 
 
@@ -55,10 +60,13 @@ var command string
 var ctrlSocket string
 var tunnelListFile string
 var bSocks bool
+var bQuiet bool
 
 var Usage = func() {
     fmt.Fprintf(os.Stderr, "Usage of %s\n", os.Args[0])
     flag.PrintDefaults()
+	fmt.Fprintf(os.Stderr, "\nConfig file:\nportStart = <first port to be used on localhost>\nportEnd = <last port to use on localhost\n[proxy]\nport = <SOCKS proxy to create on localhost. OPTIONAL (used with -s parameter)>\naddress = \"<IP address to proxy. MANDATORY>\"\n")
+	fmt.Fprintf(os.Stderr, "user=\"<proxy username. MANDATORY>\"\n")
 }
 
 
@@ -79,9 +87,9 @@ func readLines(path string) ([]string, error) {
 
 func main() {
 	flag.StringVar(&cfgFile, "c", "tunnels.cfg", "Tunnel config setup file")
-	flag.StringVar(&command, "e", "help", "Execute command: help|attach|detatch|config|forward <local port:ip:remote port>|remote <remote port:ip:local port>")
+	flag.StringVar(&command, "e", "help", "Execute command (NOTE: must be last parameter): \n help\n attach\n detach\n config\n forward <local port:ip:remote port>\n remote <remote port:ip:local port>\n autoforward <ip:remote port>\n ")
 	flag.BoolVar(&bSocks,"s", false, "Enable SOCKS server on attach")
-	
+	flag.BoolVar(&bQuiet,"q", false, "Quiet just print the port number. Used in scripts")
 	flag.Usage = Usage
     flag.Parse()
 
@@ -104,25 +112,26 @@ func main() {
 	if command == "attach" {		
 		
 		if _, err := os.Stat(ctrlSocket); err == nil {
+			if (bQuiet) { os.Exit(0) }
 			fmt.Printf("Server %s already attached", *proxyServerAddr)
 			os.Exit(1)
 		}
 		var cmd *exec.Cmd
 		if bSocks {
-			cmd = exec.Command("ssh", "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT","-D", fmt.Sprintf("%d", *proxyPort), *proxyServerAddr)				
+			cmd = exec.Command("ssh", "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT","-D", fmt.Sprintf("%d", *proxyPort), "-l", *proxyUser, *proxyServerAddr)	
     
 
 		} else
 		{
-			cmd = exec.Command("ssh", "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT", *proxyServerAddr)	
+			cmd = exec.Command("ssh", "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT", "-l", *proxyUser, *proxyServerAddr)	
      
 			
 		}
-					     stdout, err := cmd.StdoutPipe()
+		stdout, err := cmd.StdoutPipe()
 
 		 if err != nil {
-        log.Fatal(err)
-     }
+        	log.Fatal(err)
+     	}
      stderr, err := cmd.StderrPipe()
      if err != nil {
         log.Fatal(err)
@@ -141,12 +150,12 @@ func main() {
         log.Fatal(err)
      }
 
-		fmt.Printf("Server %s is now attached\n", *proxyServerAddr)
+		if (!bQuiet) { fmt.Printf("Server %s is now attached\n", *proxyServerAddr) }
 		os.Exit(0)
 	} else
 	if command == "detach" {
-		fmt.Printf("detach")
 		if _, err := os.Stat(ctrlSocket); os.IsNotExist(err)  {
+			if (bQuiet) { os.Exit(0) }
 			fmt.Printf("Server %s already detached", *proxyServerAddr)
 			os.Exit(1)
 		}
@@ -174,19 +183,22 @@ func main() {
 	if err != nil {
         log.Fatal(err)
      }
-		fmt.Printf("Server %s is now detached\n", *proxyServerAddr)
+		if (!bQuiet) { fmt.Printf("Server %s is now detached\n", *proxyServerAddr) }
 		os.Remove(tunnelListFile)
 		os.Exit(0)
 	} else
 	if command == "forward" {
-//		fmt.Printf("forward tunnel\n")
 		if _, err := os.Stat(ctrlSocket); os.IsNotExist(err)  {
-			fmt.Printf("Server %s is not attached", *proxyServerAddr)
+			if (bQuiet) {
+				fmt.Println("-1")
+			} else
+			{
+				fmt.Printf("Server %s is not attached", *proxyServerAddr)				
+			}
 			os.Exit(1)
 		}
-		
-		
-		cmd := exec.Command("ssh", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-L", os.Args[len(os.Args) - 1], *proxyServerAddr)
+		cmd := exec.Command("ssh", "-4", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-L", os.Args[len(os.Args) - 1], *proxyServerAddr,
+		"-o", "ExitOnForwardFailure=yes")
      stdout, err := cmd.StdoutPipe()
      if err != nil {
         log.Fatal(err)
@@ -206,9 +218,10 @@ func main() {
 
 	err = cmd.Wait()
 	if err != nil {
+
         log.Fatal(err)
      }
-		fmt.Printf("Forward tunnel %s active\n", os.Args[len(os.Args) - 1])
+	if (!bQuiet) { fmt.Printf("Forward tunnel %s active\n", os.Args[len(os.Args) - 1]) }
 	f, err := os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		f, err = os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
@@ -224,10 +237,91 @@ func main() {
 	}
 			os.Exit(0)
 	} else
-	if command == "remote" {
-//		fmt.Printf("remote tunnel\n")
+	if command == "autoforward" {
 		if _, err := os.Stat(ctrlSocket); os.IsNotExist(err)  {
-			fmt.Printf("Server %s is not attached", *proxyServerAddr)
+			if (bQuiet) {
+				fmt.Println("-1")
+			} else
+			{
+				fmt.Printf("Server %s is not attached", *proxyServerAddr)
+			}
+			os.Exit(1)
+		}
+		port := *portStart
+		
+retryForward:
+		
+		cmd := exec.Command("ssh", "-4", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-L", 
+		fmt.Sprintf("%d:%s",port,os.Args[len(os.Args) - 1]), *proxyServerAddr,
+		"-o", "ExitOnForwardFailure=yes")
+     stdout, err := cmd.StdoutPipe()
+     if err != nil {
+		if (bQuiet) {
+			fmt.Println("-1")
+			os.Exit(1)
+		}
+        log.Fatal(err)
+     }
+ /*    stderr, err := cmd.StderrPipe()
+     if err != nil {
+		fmt.Println("2")
+        log.Fatal(err)
+     }
+	*/
+     err = cmd.Start()
+     if err != nil {
+		if (bQuiet) {
+			fmt.Println("-1")
+			os.Exit(1)
+		}
+        log.Fatal(err)
+     }
+     
+
+    go io.Copy(os.Stdout, stdout)
+//    go io.Copy(os.Stderr, stderr)
+
+	err = cmd.Wait()
+	if err != nil {
+		if (port < *portEnd) {
+			port++
+			goto retryForward
+		}
+		if (bQuiet) {
+			fmt.Println("-1")
+			os.Exit(1)
+		}
+
+        log.Fatal(err)
+     }
+	if (bQuiet) {
+		fmt.Printf("%d\n", port)
+	} else {
+		fmt.Printf("Forward tunnel %d:%s active\n", port, os.Args[len(os.Args) - 1])
+	}
+	f, err := os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		f, err = os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+		if err != nil {
+		    panic(err)
+		}
+	}
+
+	defer f.Close()
+
+	if _, err = f.WriteString(fmt.Sprintf("Forward %d:%s\n", port,os.Args[len(os.Args) - 1])); err != nil {
+	    panic(err)
+	}
+			os.Exit(0)
+	} else
+	if command == "remote" {
+		if _, err := os.Stat(ctrlSocket); os.IsNotExist(err)  {
+			if (bQuiet) {
+				fmt.Println("-1")
+			} else
+			{
+				fmt.Printf("Server %s is not attached", *proxyServerAddr)
+			}
 			os.Exit(1)
 		}
 		
@@ -235,14 +329,26 @@ func main() {
 		cmd := exec.Command("ssh", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-R", os.Args[len(os.Args) - 1], *proxyServerAddr)
      stdout, err := cmd.StdoutPipe()
      if err != nil {
+		if (bQuiet) {
+			fmt.Println("-1")
+			os.Exit(1)
+		}
         log.Fatal(err)
      }
      stderr, err := cmd.StderrPipe()
      if err != nil {
+		if (bQuiet) {
+			fmt.Println("-1")
+			os.Exit(1)
+		}
         log.Fatal(err)
      }
      err = cmd.Start()
      if err != nil {
+		if (bQuiet) {
+			fmt.Println("-1")
+			os.Exit(1)
+		}
         log.Fatal(err)
      }
      
@@ -252,10 +358,14 @@ func main() {
 
 	err = cmd.Wait()
 	if err != nil {
-        log.Fatal(err)
+        if (bQuiet) {
+			fmt.Println("-1")
+			os.Exit(1)
+		}
+		log.Fatal(err)
      }
-		fmt.Printf("Remote tunnel %s active\n", os.Args[len(os.Args) - 1])
-		f, err := os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY, 0600)
+	if (!bQuiet) { fmt.Printf("Remote tunnel %s active\n", os.Args[len(os.Args) - 1]) }
+	f, err := os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		f, err = os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
 		if err != nil {
@@ -270,8 +380,89 @@ func main() {
 	}
 		os.Exit(0)
 	} else
+	if command == "autoremote" {
+		if _, err := os.Stat(ctrlSocket); os.IsNotExist(err)  {
+			if (bQuiet) {
+				fmt.Println("-1")
+			} else
+			{
+				fmt.Printf("Server %s is not attached", *proxyServerAddr)
+			}
+			os.Exit(1)
+		}
+		port := *portStart
+		
+retryRemote:
+		
+		cmd := exec.Command("ssh", "-4", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-R", 
+		fmt.Sprintf("%s:%d",os.Args[len(os.Args) - 1],port), *proxyServerAddr,
+		"-o", "ExitOnForwardFailure=yes")
+     stdout, err := cmd.StdoutPipe()
+     if err != nil {
+		if (bQuiet) {
+			fmt.Println("-1")
+			os.Exit(1)
+		}
+        log.Fatal(err)
+     }
+ /*    stderr, err := cmd.StderrPipe()
+     if err != nil {
+		fmt.Println("2")
+        log.Fatal(err)
+     }
+	*/
+     err = cmd.Start()
+     if err != nil {
+		if (bQuiet) {
+			fmt.Println("-1")
+			os.Exit(1)
+		}
+        log.Fatal(err)
+     }
+     
+
+    go io.Copy(os.Stdout, stdout)
+//    go io.Copy(os.Stderr, stderr)
+
+	err = cmd.Wait()
+	if err != nil {
+		log.Fatal(err)
+		if (port < *portEnd) {
+			port++
+			goto retryRemote
+		}
+		if (bQuiet) {
+			fmt.Println("-1")
+			os.Exit(1)
+		}
+
+        log.Fatal(err)
+     }
+	if (bQuiet) {
+		fmt.Printf("%d\n", port)
+	} else {
+		fmt.Printf("Remote tunnel %s:%d active\n", os.Args[len(os.Args) - 1], port)
+	}
+	f, err := os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		f, err = os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+		if err != nil {
+		    panic(err)
+		}
+	}
+
+	defer f.Close()
+
+	if _, err = f.WriteString(fmt.Sprintf("Remote %s:%d\n", os.Args[len(os.Args) - 1],port)); err != nil {
+	    panic(err)
+	}
+			os.Exit(0)
+	} else
 	if command == "config" {
-		fmt.Printf("Configuration:\nInstance: %d\nServer: %s:%d\n",*instance,*proxyServerAddr,*proxyPort)
+		fmt.Printf("Configuration:\nInstance: %d\nServer: %s\n",*instance,*proxyServerAddr)
+		if bSocks {
+			fmt.Printf("SOCKS server on localhost port %d\n", proxyPort)
+		}
 		if _, err := os.Stat(ctrlSocket); os.IsNotExist(err)  {
 			fmt.Printf("Not attached\n")
 			os.Exit(0)
@@ -281,13 +472,19 @@ func main() {
 		}
 
 		lines, err := readLines(tunnelListFile)
-    if err == nil {
-		if len(lines) > 0 {
-			fmt.Printf("Tunnels:\n")
-			for _,item := range lines {
-        		fmt.Println(item)
+    	if err == nil {
+			if len(lines) > 0 {
+				fmt.Printf("Tunnels:\n")
+				for _,item := range lines {
+    	    		fmt.Println(item)
+				}
+			} else
+			{
+				fmt.Println("No active tunnels")
 			}
-		}
+		} else
+		{
+			fmt.Println("No active tunnels")
 		}
 		os.Exit(0)
 	} else
