@@ -52,6 +52,7 @@ var (
 	proxySSHMasterFlag  = config.String("proxy.sshmasterflag", "-o \"ControlMaster=yes\" -o \"ControlPath=~/.ssh/%r@%h:%p\"")
 	proxyUser           = config.String("proxy.user", "proxy")
 	instance            = config.Int("instance", 0)
+	sshbin              = config.String("ssh","ssh")
 )
 
 
@@ -67,6 +68,7 @@ var Usage = func() {
     flag.PrintDefaults()
 	fmt.Fprintf(os.Stderr, "\nConfig file:\nportStart = <first port to be used on localhost>\nportEnd = <last port to use on localhost\n[proxy]\nport = <SOCKS proxy to create on localhost. OPTIONAL (used with -s parameter)>\naddress = \"<IP address to proxy. MANDATORY>\"\n")
 	fmt.Fprintf(os.Stderr, "user=\"<proxy username. MANDATORY>\"\n")
+	fmt.Fprintf(os.Stderr, "ssh=\"<ssh client with full path. Recommended if not using default ssh>\"\n")
 }
 
 
@@ -117,13 +119,16 @@ func main() {
 			os.Exit(1)
 		}
 		var cmd *exec.Cmd
+		
+		// -o TCPKeepAlive=yes -o ServerAliveInterval=60
+		
 		if bSocks {
-			cmd = exec.Command("ssh", "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT","-D", fmt.Sprintf("%d", *proxyPort), "-l", *proxyUser, *proxyServerAddr)	
+			cmd = exec.Command(*sshbin, "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT","-D", fmt.Sprintf("%d", *proxyPort), "-l", *proxyUser, *proxyServerAddr)	
     
 
 		} else
 		{
-			cmd = exec.Command("ssh", "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT", "-l", *proxyUser, *proxyServerAddr)	
+			cmd = exec.Command(*sshbin, "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT", "-l", *proxyUser, *proxyServerAddr)	
      
 			
 		}
@@ -160,7 +165,7 @@ func main() {
 			os.Exit(1)
 		}
 		
-		cmd := exec.Command("ssh", "-O", "stop", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), *proxyServerAddr)
+		cmd := exec.Command(*sshbin, "-O", "stop", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), *proxyServerAddr)
 
      stdout, err := cmd.StdoutPipe()
      if err != nil {
@@ -197,7 +202,7 @@ func main() {
 			}
 			os.Exit(1)
 		}
-		cmd := exec.Command("ssh", "-4", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-L", os.Args[len(os.Args) - 1], *proxyServerAddr,
+		cmd := exec.Command(*sshbin, "-4", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-L", os.Args[len(os.Args) - 1], *proxyServerAddr,
 		"-o", "ExitOnForwardFailure=yes")
      stdout, err := cmd.StdoutPipe()
      if err != nil {
@@ -251,7 +256,7 @@ func main() {
 		
 retryForward:
 		
-		cmd := exec.Command("ssh", "-4", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-L", 
+		cmd := exec.Command(*sshbin, "-4", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-L", 
 		fmt.Sprintf("%d:%s",port,os.Args[len(os.Args) - 1]), *proxyServerAddr,
 		"-o", "ExitOnForwardFailure=yes")
      stdout, err := cmd.StdoutPipe()
@@ -326,7 +331,7 @@ retryForward:
 		}
 		
 		
-		cmd := exec.Command("ssh", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-R", os.Args[len(os.Args) - 1], *proxyServerAddr)
+		cmd := exec.Command(*sshbin, "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-R", os.Args[len(os.Args) - 1], *proxyServerAddr)
      stdout, err := cmd.StdoutPipe()
      if err != nil {
 		if (bQuiet) {
@@ -394,7 +399,7 @@ retryForward:
 		
 retryRemote:
 		
-		cmd := exec.Command("ssh", "-4", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-R", 
+		cmd := exec.Command(*sshbin, "-4", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-R", 
 		fmt.Sprintf("%s:%d",os.Args[len(os.Args) - 1],port), *proxyServerAddr,
 		"-o", "ExitOnForwardFailure=yes")
      stdout, err := cmd.StdoutPipe()
@@ -461,7 +466,7 @@ retryRemote:
 	if command == "config" {
 		fmt.Printf("Configuration:\nInstance: %d\nServer: %s\n",*instance,*proxyServerAddr)
 		if bSocks {
-			fmt.Printf("SOCKS server on localhost port %d\n", proxyPort)
+			fmt.Printf("SOCKS server on localhost port %d\n", *proxyPort)
 		}
 		if _, err := os.Stat(ctrlSocket); os.IsNotExist(err)  {
 			fmt.Printf("Not attached\n")
