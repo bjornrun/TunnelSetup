@@ -40,6 +40,8 @@ import (
 	"io"
 	"os/user"
 	"bufio"
+	"regexp"
+//	"strconv"
 )
 
 var (
@@ -87,6 +89,59 @@ func readLines(path string) ([]string, error) {
   return lines, scanner.Err()
 }
 
+func getLastPortFromString(str string) string {
+	re := regexp.MustCompile("([0-9]+)$")
+	result := re.FindStringSubmatch(str)
+	if (len(result) == 2) {
+		return result[1]
+	}
+	return ""
+}
+
+func checkTunnelPresent(path string, tunnelType string, port string) bool {
+  file, err := os.Open(path)
+  if err != nil {
+    return false
+  }
+  defer file.Close()
+
+  re := regexp.MustCompile(fmt.Sprintf("%s ([0-9]+):([a-z0-9.]+):([0-9]+)", tunnelType))
+
+  scanner := bufio.NewScanner(file)
+  for scanner.Scan() {
+	result := re.FindStringSubmatch(scanner.Text())
+	
+	if (len(result) == 4) {
+		if (result[3] == port) {
+			return true
+		}
+	}
+  }
+  return false
+}
+
+func getLocalTunnelPort(path string, tunnelType string, port string) string {
+  file, err := os.Open(path)
+  if err != nil {
+    return ""
+  }
+  defer file.Close()
+
+  re := regexp.MustCompile(fmt.Sprintf("%s ([0-9]+):([a-z0-9.]+):([0-9]+)", tunnelType))
+
+  scanner := bufio.NewScanner(file)
+  for scanner.Scan() {
+	result := re.FindStringSubmatch(scanner.Text())
+	if (len(result) == 4) {
+		if (result[3] == port) {
+			return result[1]
+		}
+	}
+  }
+  return "-1"
+}
+
+
 func main() {
 	flag.StringVar(&cfgFile, "c", "tunnels.cfg", "Tunnel config setup file")
 	flag.StringVar(&command, "e", "help", "Execute command (NOTE: must be last parameter): \n help\n attach\n detach\n config\n forward <local port:ip:remote port>\n remote <remote port:ip:local port>\n autoforward <ip:remote port>\n ")
@@ -95,7 +150,8 @@ func main() {
 	flag.Usage = Usage
     flag.Parse()
 
-	fmt.Printf("Tunnel Setup\n")
+//	fmt.Printf("Tunnel Setup\n")
+	if (!bQuiet) { fmt.Printf("Tunnel Setup\n") }
 		
 	if err := config.Parse(cfgFile); err != nil {
 		panic(err)
@@ -104,8 +160,13 @@ func main() {
     if err != nil {
         log.Fatal( err )
     }
-	ctrlSocket := fmt.Sprintf("%s/.ssh/%s.%d", usr.HomeDir, *proxyServerAddr, *instance)	
-	tunnelListFile := fmt.Sprintf("%s/.ssh/%s.%d.txt", usr.HomeDir, *proxyServerAddr, *instance)
+	hostname, err := os.Hostname()
+    if err != nil {
+        log.Fatal( err )
+    }
+
+	ctrlSocket := fmt.Sprintf("%s/.ssh/%s.%s.%d", usr.HomeDir, *proxyServerAddr, hostname, *instance)	
+	tunnelListFile := fmt.Sprintf("%s/.ssh/%s.%s.%d.txt", usr.HomeDir, *proxyServerAddr, hostname, *instance)
 	
 	if command == "help" {
 		flag.PrintDefaults()
@@ -118,17 +179,19 @@ func main() {
 			fmt.Printf("Server %s already attached", *proxyServerAddr)
 			os.Exit(1)
 		}
+		
+		os.Remove(tunnelListFile)
+		
 		var cmd *exec.Cmd
 		
-		// -o TCPKeepAlive=yes -o ServerAliveInterval=60
 		
 		if bSocks {
-			cmd = exec.Command(*sshbin, "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT","-D", fmt.Sprintf("%d", *proxyPort), "-l", *proxyUser, *proxyServerAddr)	
+			cmd = exec.Command(*sshbin, "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-o","TCPKeepAlive=yes","-o","ServerAliveInterval=60", "-fNT","-D", fmt.Sprintf("%d", *proxyPort), "-l", *proxyUser, *proxyServerAddr)	
     
 
 		} else
 		{
-			cmd = exec.Command(*sshbin, "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-fNT", "-l", *proxyUser, *proxyServerAddr)	
+			cmd = exec.Command(*sshbin, "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket),"-o","TCPKeepAlive=yes","-o","ServerAliveInterval=60", "-fNT", "-l", *proxyUser, *proxyServerAddr)	
      
 			
 		}
@@ -198,9 +261,18 @@ func main() {
 				fmt.Println("-1")
 			} else
 			{
-				fmt.Printf("Server %s is not attached", *proxyServerAddr)				
+				fmt.Printf("Server %s is not attached\n", *proxyServerAddr)				
 			}
 			os.Exit(1)
+		}
+		if (checkTunnelPresent(tunnelListFile, "Forward", getLastPortFromString(os.Args[len(os.Args) - 1]))) {
+			if (bQuiet) {
+				fmt.Printf("%s\n", getLocalTunnelPort(tunnelListFile, "Forward", getLastPortFromString(os.Args[len(os.Args) - 1])))
+			} else
+			{
+				fmt.Printf("Forward tunnel %s is already active\n", os.Args[len(os.Args) - 1])				
+			}
+			os.Exit(0)
 		}
 		cmd := exec.Command(*sshbin, "-4", "-O", "forward", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-L", os.Args[len(os.Args) - 1], *proxyServerAddr,
 		"-o", "ExitOnForwardFailure=yes")
@@ -248,9 +320,18 @@ func main() {
 				fmt.Println("-1")
 			} else
 			{
-				fmt.Printf("Server %s is not attached", *proxyServerAddr)
+				fmt.Printf("Server %s is not attached\n", *proxyServerAddr)
 			}
 			os.Exit(1)
+		}
+		if (checkTunnelPresent(tunnelListFile, "Forward", getLastPortFromString(os.Args[len(os.Args) - 1]))) {
+			if (bQuiet) {
+				fmt.Printf("%s\n", getLocalTunnelPort(tunnelListFile, "Forward", getLastPortFromString(os.Args[len(os.Args) - 1])))
+			} else
+			{
+				fmt.Printf("Forward tunnel %s is already active\n", os.Args[len(os.Args) - 1])				
+			}
+			os.Exit(0)
 		}
 		port := *portStart
 		
