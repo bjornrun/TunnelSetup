@@ -23,6 +23,7 @@ THE SOFTWARE.
 */
 
 /* Changes:
+1.2 Added extra error reporting
 1.1 Added SOCKS5 setup
 1.0 Initial version
 */
@@ -228,26 +229,17 @@ func main() {
 
 		cmd := exec.Command(*sshbin, "-O", "stop", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), *proxyServerAddr)
 
-		stdout, err := cmd.StdoutPipe()
+		output, err := cmd.CombinedOutput()
 		if err != nil {
-			log.Fatal(err)
-		}
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			log.Fatal(err)
-		}
-		err = cmd.Start()
-		if err != nil {
-			log.Fatal(err)
+			if !bQuiet {
+		    	fmt.Println(fmt.Sprint(err) + ": " + string(output))
+				os.Remove(ctrlSocket)
+				fmt.Println("Socket connection is removed")
+			}
+		} else {
+		    fmt.Println(string(output))
 		}
 
-		go io.Copy(os.Stdout, stdout)
-		go io.Copy(os.Stderr, stderr)
-
-		err = cmd.Wait()
-		if err != nil {
-			log.Fatal(err)
-		}
 		if !bQuiet {
 			fmt.Printf("Server %s is now detached\n", *proxyServerAddr)
 		}
