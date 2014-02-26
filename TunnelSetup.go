@@ -42,7 +42,7 @@ import (
 	"os/exec"
 	"os/user"
 	"regexp"
-	//	"strconv"
+	"strconv"
 )
 
 var (
@@ -50,7 +50,9 @@ var (
 	portStart          = config.Int("portStart", 10000)
 	portEnd            = config.Int("portEnd", 65535)
 	lockdir            = config.String("lockdir", "/tmp/tunnelsetup/")
-	proxyPort          = config.Int("proxy.port", 1080)
+	socksStart         = config.Int("proxy.socksStart", 1080)
+	socksEnd           = config.Int("proxy.socksEnd", 10800)
+	socksActive        = config.Bool("proxy.socksActive", false)
 	proxyServerAddr    = config.String("proxy.address", "10.0.1.136")
 	proxySSHMasterFlag = config.String("proxy.sshmasterflag", "-o \"ControlMaster=yes\" -o \"ControlPath=~/.ssh/%r@%h:%p\"")
 	proxyUser          = config.String("proxy.user", "proxy")
@@ -64,6 +66,8 @@ var ctrlSocket string
 var tunnelListFile string
 var bSocks bool
 var bQuiet bool
+var socksSocket int
+var userName string
 
 var Usage = func() {
 	fmt.Fprintf(os.Stderr, "Usage of %s\n", os.Args[0])
@@ -140,6 +144,37 @@ func getLocalTunnelPort(path string, tunnelType string, port string) string {
 	return "-1"
 }
 
+func saveTunnel2Config(templ string, arg ...string) {
+	f, err := os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		f, err = os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	defer f.Close()
+	
+	switch len(arg) {
+		case 1:
+		if _, err = f.WriteString(fmt.Sprintf(templ, arg[0])); err != nil {
+			panic(err)
+		}
+		case 2:
+		if _, err = f.WriteString(fmt.Sprintf(templ, arg[0], arg[1])); err != nil {
+			panic(err)
+		}
+		case 3:
+		if _, err = f.WriteString(fmt.Sprintf(templ, arg[0], arg[1], arg[2])); err != nil {
+			panic(err)
+		}
+		default:
+		if _, err = f.WriteString(fmt.Sprintf(templ, arg)); err != nil {
+			panic(err)
+		}
+	}
+}
+
 func main() {
 	flag.StringVar(&cfgFile, "c", "tunnels.cfg", "Tunnel config setup file")
 	flag.StringVar(&command, "e", "help", "Execute command (NOTE: must be last parameter): \n help\n attach\n detach\n config\n forward <local port:ip:remote port>\n remote <remote port:ip:local port>\n autoforward <ip:remote port>\n ")
@@ -148,7 +183,6 @@ func main() {
 	flag.Usage = Usage
 	flag.Parse()
 
-	//	fmt.Printf("Tunnel Setup\n")
 	if !bQuiet {
 		fmt.Printf("Tunnel Setup\n")
 	}
@@ -160,13 +194,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	userName = usr.Username
+	
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	if (*socksActive) {
+		bSocks = true
+	}
+
 	ctrlSocket := fmt.Sprintf("%s/.ssh/%s.%s.%d", usr.HomeDir, *proxyServerAddr, hostname, *instance)
-	tunnelListFile := fmt.Sprintf("%s/.ssh/%s.%s.%d.txt", usr.HomeDir, *proxyServerAddr, hostname, *instance)
+	tunnelListFile = fmt.Sprintf("%s/.ssh/%s.%s.%d.txt", usr.HomeDir, *proxyServerAddr, hostname, *instance)
+
 
 	if command == "help" {
 		flag.PrintDefaults()
@@ -183,39 +224,55 @@ func main() {
 
 		os.Remove(tunnelListFile)
 
+		socksSocket = *socksStart
+		if (!bSocks) {
+			socksSocket = -1
+		}
 		var cmd *exec.Cmd
+		
+
+retryMaster:
 
 		if bSocks {
-			cmd = exec.Command(*sshbin, "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-o", "TCPKeepAlive=yes", "-o", "ServerAliveInterval=60", "-o", "UserKnownHostFile=/dev/null", "-o", "StrictHostKeyChecking=no", "-fNT", "-D", fmt.Sprintf("%d", *proxyPort), "-l", *proxyUser, *proxyServerAddr)
+			cmd = exec.Command(*sshbin, "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-o", "TCPKeepAlive=yes", "-o", "ServerAliveInterval=60",  "-o", "StrictHostKeyChecking=no", "-o", "ExitOnForwardFailure=yes", "-fNT", "-D", fmt.Sprintf("%d", socksSocket), "-l", *proxyUser, *proxyServerAddr)
 
 		} else {
-			cmd = exec.Command(*sshbin, "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-o", "TCPKeepAlive=yes", "-o", "ServerAliveInterval=60", "-o", "UserKnownHostFile=/dev/null", "-o", "StrictHostKeyChecking=no", "-fNT", "-l", *proxyUser, *proxyServerAddr)
+			cmd = exec.Command(*sshbin, "-o", "ControlMaster=yes", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), "-o", "TCPKeepAlive=yes", "-o", "ServerAliveInterval=60", "-o", "StrictHostKeyChecking=no", "-fNT", "-l", *proxyUser, *proxyServerAddr)
 
 		}
+		
+		
 		stdout, err := cmd.StdoutPipe()
 
 		if err != nil {
 			log.Fatal(err)
 		}
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			log.Fatal(err)
-		}
+		
 		err = cmd.Start()
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		go io.Copy(os.Stdout, stdout)
-		go io.Copy(os.Stderr, stderr)
 
 		err = cmd.Wait()
 		if err != nil {
+			if bSocks && socksSocket < *socksEnd {
+				socksSocket++
+				goto retryMaster
+			}
 			log.Fatal(err)
 		}
 
 		if !bQuiet {
 			fmt.Printf("Server %s is now attached\n", *proxyServerAddr)
+		}
+		if socksSocket > -1 {
+			if !bQuiet {
+				fmt.Print("Socks server on port ")
+			}
+			fmt.Printf("%d\n", socksSocket)
+			saveTunnel2Config("SOCKS server at %s\n", strconv.Itoa(socksSocket))
 		}
 		os.Exit(0)
 	} else if command == "detach" {
@@ -288,19 +345,7 @@ func main() {
 		if !bQuiet {
 			fmt.Printf("Forward tunnel %s active\n", os.Args[len(os.Args)-1])
 		}
-		f, err := os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			f, err = os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
-			if err != nil {
-				panic(err)
-			}
-		}
-
-		defer f.Close()
-
-		if _, err = f.WriteString(fmt.Sprintf("Forward %s\n", os.Args[len(os.Args)-1])); err != nil {
-			panic(err)
-		}
+		saveTunnel2Config("Forward %s\n", os.Args[len(os.Args)-1])
 		os.Exit(0)
 	} else if command == "autoforward" {
 		if _, err := os.Stat(ctrlSocket); os.IsNotExist(err) {
@@ -370,19 +415,8 @@ func main() {
 		} else {
 			fmt.Printf("Forward tunnel %d:%s active\n", port, os.Args[len(os.Args)-1])
 		}
-		f, err := os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			f, err = os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
-			if err != nil {
-				panic(err)
-			}
-		}
-
-		defer f.Close()
-
-		if _, err = f.WriteString(fmt.Sprintf("Forward %d:%s\n", port, os.Args[len(os.Args)-1])); err != nil {
-			panic(err)
-		}
+		saveTunnel2Config("Forward %s:%s\n",strconv.Itoa(port) ,os.Args[len(os.Args)-1])
+		
 		os.Exit(0)
 	} else if command == "remote" {
 		if _, err := os.Stat(ctrlSocket); os.IsNotExist(err) {
@@ -434,19 +468,7 @@ func main() {
 		if !bQuiet {
 			fmt.Printf("Remote tunnel %s active\n", os.Args[len(os.Args)-1])
 		}
-		f, err := os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			f, err = os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
-			if err != nil {
-				panic(err)
-			}
-		}
-
-		defer f.Close()
-
-		if _, err = f.WriteString(fmt.Sprintf("Remote %s\n", os.Args[len(os.Args)-1])); err != nil {
-			panic(err)
-		}
+		saveTunnel2Config("Remote %s\n", os.Args[len(os.Args)-1])
 		os.Exit(0)
 	} else if command == "autoremote" {
 		if _, err := os.Stat(ctrlSocket); os.IsNotExist(err) {
@@ -509,35 +531,23 @@ func main() {
 		} else {
 			fmt.Printf("Remote tunnel %s:%d active\n", os.Args[len(os.Args)-1], port)
 		}
-		f, err := os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			f, err = os.OpenFile(tunnelListFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
-			if err != nil {
-				panic(err)
-			}
-		}
-
-		defer f.Close()
-
-		if _, err = f.WriteString(fmt.Sprintf("Remote %s:%d\n", os.Args[len(os.Args)-1], port)); err != nil {
-			panic(err)
-		}
+		saveTunnel2Config("Remote %s:%d\n", os.Args[len(os.Args)-1], strconv.Itoa(port))
 		os.Exit(0)
 	} else if command == "config" {
 		fmt.Printf("Configuration:\nInstance: %d\nServer: %s\n", *instance, *proxyServerAddr)
-		if bSocks {
-			fmt.Printf("SOCKS server on localhost port %d\n", *proxyPort)
-		}
 		if _, err := os.Stat(ctrlSocket); os.IsNotExist(err) {
 			fmt.Printf("Not attached\n")
 			os.Exit(0)
 		} else {
 			fmt.Printf("Attached to Proxy %s\n", *proxyServerAddr)
 		}
+		
+		fmt.Printf("User: %s\n", userName)
 
 		lines, err := readLines(tunnelListFile)
 		if err == nil {
 			if len(lines) > 0 {
+				
 				fmt.Printf("Tunnels:\n")
 				for _, item := range lines {
 					fmt.Println(item)
