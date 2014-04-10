@@ -23,6 +23,7 @@ THE SOFTWARE.
 */
 
 /* Changes:
+1.3 Remove stale socket files
 1.2 Added extra error reporting
 1.1 Added SOCKS5 setup
 1.0 Initial version
@@ -215,11 +216,28 @@ func main() {
 	} else if command == "attach" {
 
 		if _, err := os.Stat(ctrlSocket); err == nil {
-			if bQuiet {
-				os.Exit(0)
+			cmd := exec.Command(*sshbin, "-O", "check", "-o", fmt.Sprintf("ControlPath=%s", ctrlSocket), *proxyServerAddr)
+
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				if !bQuiet {
+			    	fmt.Println(fmt.Sprint(err) + ": " + string(output))
+					os.Remove(ctrlSocket)
+					fmt.Println("Socket connection is removed")
+				}
+			} else {
+				if bQuiet {
+					// if running quiet (ie in a script) it is assumed a new master connection is wanted each time
+					// os.Exit(0)
+					os.Remove(ctrlSocket)
+				} else
+				{
+					fmt.Printf("Server %s already attached", *proxyServerAddr)
+			    	fmt.Println(string(output))
+					os.Exit(1)
+				}
 			}
-			fmt.Printf("Server %s already attached", *proxyServerAddr)
-			os.Exit(1)
+			
 		}
 
 		os.Remove(tunnelListFile)
