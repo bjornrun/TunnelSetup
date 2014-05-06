@@ -223,6 +223,7 @@ func main() {
 				if !bQuiet {
 			    	fmt.Println(fmt.Sprint(err) + ": " + string(output))
 					os.Remove(ctrlSocket)
+					os.Remove(tunnelListFile)
 					fmt.Println("Socket connection is removed")
 				}
 			} else {
@@ -230,6 +231,7 @@ func main() {
 					// if running quiet (ie in a script) it is assumed a new master connection is wanted each time
 					// os.Exit(0)
 					os.Remove(ctrlSocket)
+					os.Remove(tunnelListFile)
 				} else
 				{
 					fmt.Printf("Server %s already attached", *proxyServerAddr)
@@ -309,6 +311,7 @@ retryMaster:
 			if !bQuiet {
 		    	fmt.Println(fmt.Sprint(err) + ": " + string(output))
 				os.Remove(ctrlSocket)
+				os.Remove(tunnelListFile)
 				fmt.Println("Socket connection is removed")
 			}
 		} else {
