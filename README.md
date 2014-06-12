@@ -3,6 +3,8 @@ TunnelSetup
 
 Setup dynamic SSH tunnels 
 
+TL;dr; Fix one glaring shortcoming of SSH, automatically find a free port for tunnel use.
+
 
 Usage:
 
@@ -49,7 +51,7 @@ Usage:
 
 FAQ:
 
-Where can I find a later version of ssh for acient SuSE (e.g. Version 11p2) so it handles multiplexed forward?
+Where can I find a later version of ssh for ancient SuSE (e.g. Version 11p2) so it handles multiplexed forward?
 
 You download it from here:
 http://download.opensuse.org/repositories/home:/H4T:/branches:/network/SLE_11_SP2/x86_64/openssh-6.2p2-68.1.x86_64.rpm
